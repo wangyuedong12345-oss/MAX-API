@@ -96,3 +96,31 @@ func TestBuildTestRequestAlphaSearch(t *testing.T) {
 	require.Equal(t, "gpt-5.1", alphaRequest.Model)
 	require.Contains(t, string(alphaRequest.RawBody), `"search_query"`)
 }
+
+func TestBuildTestRequestSeedreamUsesImageRequest(t *testing.T) {
+	request := buildTestRequest(
+		"Doubao-Seedream-5.0-lite",
+		"",
+		&model.Channel{Type: constant.ChannelTypeVolcEngine},
+		false,
+	)
+
+	imageRequest, ok := request.(*dto.ImageRequest)
+	require.True(t, ok)
+	require.Equal(t, "Doubao-Seedream-5.0-lite", imageRequest.Model)
+	require.Equal(t, "a cute cat", imageRequest.Prompt)
+	require.Equal(t, "1920x1920", imageRequest.Size)
+}
+
+func TestBuildTestRequestGenericImageKeepsDefaultSize(t *testing.T) {
+	request := buildTestRequest(
+		"gpt-image-1",
+		string(constant.EndpointTypeImageGeneration),
+		&model.Channel{Type: constant.ChannelTypeOpenAI},
+		false,
+	)
+
+	imageRequest, ok := request.(*dto.ImageRequest)
+	require.True(t, ok)
+	require.Equal(t, "1024x1024", imageRequest.Size)
+}

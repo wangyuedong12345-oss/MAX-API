@@ -46,7 +46,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *type
 
 	var requestBody io.Reader
 
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	if shouldPassThroughImageRequest(info) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -159,4 +159,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *type
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
 	return nil
+}
+
+func shouldPassThroughImageRequest(info *relaycommon.RelayInfo) bool {
+	if info != nil && info.ChannelType == constant.ChannelTypeVolcEngine {
+		return false
+	}
+	return model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
 }

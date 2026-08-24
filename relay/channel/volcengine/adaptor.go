@@ -2,6 +2,7 @@ package volcengine
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	channelconstant "github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
@@ -108,7 +110,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	switch info.RelayMode {
 	case constant.RelayModeImagesGenerations:
-		return request, nil
+		return buildVolcengineImageRequest(c, request)
 	// 根据官方文档,并没有发现豆包生图支持表单请求:https://www.volcengine.com/docs/82379/1824121
 	//case constant.RelayModeImagesEdits:
 	//
@@ -212,7 +214,162 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	//	return bytes.NewReader(requestBody.Bytes()), nil
 
 	default:
-		return request, nil
+		return buildVolcengineImageRequest(c, request)
+	}
+}
+
+func buildVolcengineImageRequest(c *gin.Context, request dto.ImageRequest) (map[string]json.RawMessage, error) {
+	data, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload map[string]json.RawMessage
+	if err = common.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+
+	delete(payload, "extra_fields")
+
+	if len(request.ExtraFields) > 0 {
+		var extraFields map[string]json.RawMessage
+		if err = common.Unmarshal(request.ExtraFields, &extraFields); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal volcengine image extra_fields: %w", err)
+		}
+		for key, value := range extraFields {
+			if len(value) > 0 {
+				payload[key] = value
+			}
+		}
+	}
+
+	for key, value := range request.Extra {
+		if len(value) > 0 {
+			payload[key] = value
+		}
+	}
+
+	volcengineImageAliases := []string{
+		"image",
+		"images",
+		"image_url",
+		"image_urls",
+		"reference_image",
+		"reference_images",
+		"reference_image_url",
+		"reference_image_urls",
+		"input_image",
+		"input_images",
+	}
+	if _, ok := payload["image"]; !ok {
+		for _, alias := range volcengineImageAliases[1:] {
+			if value, hasAlias := payload[alias]; hasAlias {
+				payload["image"] = value
+				break
+			}
+		}
+	}
+	for _, alias := range volcengineImageAliases[1:] {
+		delete(payload, alias)
+	}
+
+	if _, ok := payload["image"]; !ok && c != nil && strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+		images, err := volcengineMultipartImages(c)
+		if err != nil {
+			return nil, err
+		}
+		if len(images) > 0 {
+			imageData, err := common.Marshal(images)
+			if err != nil {
+				return nil, err
+			}
+			payload["image"] = imageData
+		}
+	}
+
+	if imageValue, ok := payload["image"]; ok {
+		normalized, err := normalizeVolcengineImageField(imageValue)
+		if err != nil {
+			return nil, err
+		}
+		payload["image"] = normalized
+	}
+
+	return payload, nil
+}
+
+func normalizeVolcengineImageField(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return raw, nil
+	}
+
+	var images []string
+	if err := common.Unmarshal(raw, &images); err == nil {
+		return raw, nil
+	}
+
+	var image string
+	if err := common.Unmarshal(raw, &image); err == nil {
+		return common.Marshal([]string{image})
+	}
+
+	return nil, fmt.Errorf("volcengine image field must be a string or string array")
+}
+
+func volcengineMultipartImages(c *gin.Context) ([]string, error) {
+	multipartForm, err := c.MultipartForm()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse volcengine image multipart form: %w", err)
+	}
+	if multipartForm == nil || len(multipartForm.File) == 0 {
+		return nil, nil
+	}
+
+	var imageInputs []string
+	for fieldName, files := range multipartForm.File {
+		if !isVolcengineMultipartImageField(fieldName) {
+			continue
+		}
+		for _, fileHeader := range files {
+			file, err := fileHeader.Open()
+			if err != nil {
+				return nil, fmt.Errorf("failed to open volcengine image file: %w", err)
+			}
+			data, readErr := io.ReadAll(file)
+			closeErr := file.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read volcengine image file: %w", readErr)
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("failed to close volcengine image file: %w", closeErr)
+			}
+			if len(data) == 0 {
+				continue
+			}
+			mimeType := http.DetectContentType(data)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = detectImageMimeType(fileHeader.Filename)
+			}
+			imageInputs = append(imageInputs, fmt.Sprintf("data:%s;base64,%s", strings.ToLower(mimeType), base64.StdEncoding.EncodeToString(data)))
+		}
+	}
+
+	return imageInputs, nil
+}
+
+func isVolcengineMultipartImageField(fieldName string) bool {
+	switch fieldName {
+	case "image", "image[]", "images", "images[]",
+		"reference_image", "reference_image[]", "reference_images", "reference_images[]",
+		"input_image", "input_image[]", "input_images", "input_images[]":
+		return true
+	default:
+		return strings.HasPrefix(fieldName, "image[") ||
+			strings.HasPrefix(fieldName, "images[") ||
+			strings.HasPrefix(fieldName, "reference_image[") ||
+			strings.HasPrefix(fieldName, "reference_images[") ||
+			strings.HasPrefix(fieldName, "input_image[") ||
+			strings.HasPrefix(fieldName, "input_images[")
 	}
 }
 

@@ -134,8 +134,8 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			requestPath = "/v1/embeddings" // 修改请求路径
 		}
 
-		// VolcEngine 图像生成模型
-		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
+		// 图像生成模型
+		if common.IsImageGenerationModel(testModel) {
 			requestPath = "/v1/images/generations"
 		}
 
@@ -760,7 +760,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Model:  model,
 				Prompt: "a cute cat",
 				N:      lo.ToPtr(uint(1)),
-				Size:   "1024x1024",
+				Size:   channelTestImageSize(model),
 			}
 		case constant.EndpointTypeJinaRerank:
 			// 返回 RerankRequest
@@ -854,6 +854,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		}
 	}
 
+	if common.IsImageGenerationModel(model) {
+		return &dto.ImageRequest{
+			Model:  model,
+			Prompt: "a cute cat",
+			N:      lo.ToPtr(uint(1)),
+			Size:   channelTestImageSize(model),
+		}
+	}
+
 	// Responses-only models (e.g. codex series)
 	if strings.Contains(strings.ToLower(model), "codex") {
 		return &dto.OpenAIResponsesRequest{
@@ -891,6 +900,13 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	}
 
 	return testRequest
+}
+
+func channelTestImageSize(model string) string {
+	if strings.Contains(strings.ToLower(model), "seedream") {
+		return "1920x1920"
+	}
+	return "1024x1024"
 }
 
 func TestChannel(c *gin.Context) {
