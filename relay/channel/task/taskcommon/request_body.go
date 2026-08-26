@@ -142,8 +142,20 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	if images, ok := stringSliceValue(raw["images"]); ok {
 		req.Images = images
 	}
+	if imageURLs, ok := stringSliceValue(raw["imageUrls"]); ok {
+		req.Images = append(req.Images, imageURLs...)
+	}
+	if imageURLs, ok := stringSliceValue(raw["image_urls"]); ok {
+		req.Images = append(req.Images, imageURLs...)
+	}
 	if refs, ok := stringSliceValue(raw["reference_images"]); ok {
 		req.ReferenceImages = refs
+	}
+	if refs, ok := stringSliceValue(raw["referenceImageUrls"]); ok {
+		req.ReferenceImages = append(req.ReferenceImages, refs...)
+	}
+	if refs, ok := stringSliceValue(raw["reference_image_urls"]); ok {
+		req.ReferenceImages = append(req.ReferenceImages, refs...)
 	}
 
 	if input, ok := mapValue(raw["input"]); ok {
@@ -313,6 +325,9 @@ func boolValue(value any) (bool, bool) {
 }
 
 func stringSliceValue(value any) ([]string, bool) {
+	if s, ok := stringValue(value); ok {
+		return []string{s}, true
+	}
 	items, ok := value.([]any)
 	if !ok {
 		return nil, false

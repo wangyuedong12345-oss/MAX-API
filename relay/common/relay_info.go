@@ -803,8 +803,12 @@ func (t *TaskSubmitReq) HasImage() bool {
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	type Alias TaskSubmitReq
 	aux := &struct {
-		Metadata json.RawMessage `json:"metadata,omitempty"`
-		Duration json.RawMessage `json:"duration,omitempty"`
+		Metadata                json.RawMessage `json:"metadata,omitempty"`
+		Duration                json.RawMessage `json:"duration,omitempty"`
+		ImageUrls               json.RawMessage `json:"imageUrls,omitempty"`
+		ImageUrlsSnake          json.RawMessage `json:"image_urls,omitempty"`
+		ReferenceImageUrls      json.RawMessage `json:"referenceImageUrls,omitempty"`
+		ReferenceImageUrlsSnake json.RawMessage `json:"reference_image_urls,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
@@ -827,6 +831,25 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			}
 		}
 	}
+
+	appendRawStringList := func(raw json.RawMessage, target *[]string) {
+		if len(raw) == 0 || target == nil {
+			return
+		}
+		var values []string
+		if err := common.Unmarshal(raw, &values); err == nil {
+			*target = append(*target, values...)
+			return
+		}
+		var value string
+		if err := common.Unmarshal(raw, &value); err == nil && strings.TrimSpace(value) != "" {
+			*target = append(*target, value)
+		}
+	}
+	appendRawStringList(aux.ImageUrls, &t.Images)
+	appendRawStringList(aux.ImageUrlsSnake, &t.Images)
+	appendRawStringList(aux.ReferenceImageUrls, &t.ReferenceImages)
+	appendRawStringList(aux.ReferenceImageUrlsSnake, &t.ReferenceImages)
 
 	if len(aux.Metadata) > 0 {
 		var metadataStr string

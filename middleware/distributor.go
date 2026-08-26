@@ -283,6 +283,54 @@ func getJSONStringValue(result gjson.Result, field string) (string, error) {
 	return result.String(), nil
 }
 
+func getOpenAIVideoTaskIDFromRequest(c *gin.Context) string {
+	if taskID := c.Param("task_id"); taskID != "" {
+		return taskID
+	}
+	if taskID := c.Param("video_id"); taskID != "" {
+		return taskID
+	}
+	if taskPath := strings.Trim(c.Param("task_path"), "/"); taskPath != "" {
+		return strings.Split(taskPath, "/")[0]
+	}
+	if taskID := c.Query("task_id"); taskID != "" {
+		return taskID
+	}
+	if taskID := c.Query("video_id"); taskID != "" {
+		return taskID
+	}
+	if taskID := c.Query("id"); taskID != "" {
+		return taskID
+	}
+
+	if !strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+		return ""
+	}
+
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return ""
+	}
+	requestBody, err := storage.Bytes()
+	if err != nil || !gjson.ValidBytes(requestBody) {
+		return ""
+	}
+	values := gjson.GetManyBytes(requestBody, "model", "task_id", "video_id", "id")
+	if values[0].Exists() && values[0].Type != gjson.Null && strings.TrimSpace(values[0].String()) != "" {
+		return ""
+	}
+	for _, value := range values[1:] {
+		if value.Exists() && value.Type == gjson.String && strings.TrimSpace(value.String()) != "" {
+			return value.String()
+		}
+	}
+	return ""
+}
+
+func isVideoTaskFetchCompatibilityPath(path string) bool {
+	return path == "/agnesapi" || strings.HasPrefix(path, "/v1/tasks/")
+}
+
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	var modelRequest ModelRequest
 	shouldSelectChannel := true
@@ -330,6 +378,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		relayMode := relayconstant.RelayModeVideoSubmit
 		c.Set("relay_mode", relayMode)
 		shouldSelectChannel = false
+	} else if isVideoTaskFetchCompatibilityPath(c.Request.URL.Path) {
+		relayMode := relayconstant.RelayModeVideoFetchByID
+		if taskID := getOpenAIVideoTaskIDFromRequest(c); taskID != "" {
+			c.Set("task_id", taskID)
+		}
+		c.Set("relay_mode", relayMode)
+		shouldSelectChannel = false
 	} else if strings.Contains(c.Request.URL.Path, "/v1/videos") {
 		//curl https://api.openai.com/v1/videos \
 		//  -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -338,13 +393,19 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		//	-F input_reference="@image.jpg"
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
-			relayMode = relayconstant.RelayModeVideoSubmit
-			req, err := getModelFromRequest(c)
-			if err != nil {
-				return nil, false, err
-			}
-			if req != nil {
-				modelRequest.Model = req.Model
+			if taskID := getOpenAIVideoTaskIDFromRequest(c); taskID != "" {
+				relayMode = relayconstant.RelayModeVideoFetchByID
+				c.Set("task_id", taskID)
+				shouldSelectChannel = false
+			} else {
+				relayMode = relayconstant.RelayModeVideoSubmit
+				req, err := getModelFromRequest(c)
+				if err != nil {
+					return nil, false, err
+				}
+				if req != nil {
+					modelRequest.Model = req.Model
+				}
 			}
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -354,12 +415,18 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	} else if strings.Contains(c.Request.URL.Path, "/v1/video/generations") {
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
-			req, err := getModelFromRequest(c)
-			if err != nil {
-				return nil, false, err
+			if taskID := getOpenAIVideoTaskIDFromRequest(c); taskID != "" {
+				relayMode = relayconstant.RelayModeVideoFetchByID
+				c.Set("task_id", taskID)
+				shouldSelectChannel = false
+			} else {
+				req, err := getModelFromRequest(c)
+				if err != nil {
+					return nil, false, err
+				}
+				modelRequest.Model = req.Model
+				relayMode = relayconstant.RelayModeVideoSubmit
 			}
-			modelRequest.Model = req.Model
-			relayMode = relayconstant.RelayModeVideoSubmit
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
 			shouldSelectChannel = false

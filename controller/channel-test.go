@@ -76,21 +76,6 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 
 func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
 	tik := time.Now()
-	var unsupportedTestChannelTypes = []int{
-		constant.ChannelTypeMidjourney,
-		constant.ChannelTypeMidjourneyPlus,
-		constant.ChannelTypeSunoAPI,
-		constant.ChannelTypeKling,
-		constant.ChannelTypeJimeng,
-		constant.ChannelTypeDoubaoVideo,
-		constant.ChannelTypeVidu,
-	}
-	if lo.Contains(unsupportedTestChannelTypes, channel.Type) {
-		channelTypeName := constant.GetChannelTypeName(channel.Type)
-		return testResult{
-			localErr: fmt.Errorf("%s channel test is not supported", channelTypeName),
-		}
-	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -110,6 +95,27 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+
+	if isChannelTestVideo(endpointType, testModel) {
+		return testTaskChannel(channel, testUserID, testModel)
+	}
+
+	var unsupportedTestChannelTypes = []int{
+		constant.ChannelTypeMidjourney,
+		constant.ChannelTypeMidjourneyPlus,
+		constant.ChannelTypeSunoAPI,
+		constant.ChannelTypeKling,
+		constant.ChannelTypeJimeng,
+		constant.ChannelTypeDoubaoVideo,
+		constant.ChannelTypeVidu,
+	}
+	if lo.Contains(unsupportedTestChannelTypes, channel.Type) {
+		channelTypeName := constant.GetChannelTypeName(channel.Type)
+		return testResult{
+			context:  c,
+			localErr: fmt.Errorf("%s channel test is not supported", channelTypeName),
+		}
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -566,6 +572,63 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 		localErr:    nil,
 		maxAPIError: nil,
 	}
+}
+
+func isChannelTestVideo(endpointType, modelName string) bool {
+	if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAIVideo {
+		return true
+	}
+	return endpointType == "" && common.IsVideoGenerationModel(modelName)
+}
+
+func testTaskChannel(channel *model.Channel, testUserID int, testModel string) testResult {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	requestBody, err := common.Marshal(map[string]any{
+		"model":          testModel,
+		"prompt":         "a cute cat running in the garden",
+		"duration":       5,
+		"resolution":     "720p",
+		"ratio":          "16:9",
+		"generate_audio": false,
+	})
+	if err != nil {
+		return testResult{context: c, localErr: err}
+	}
+
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewReader(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("specific_channel_id", strconv.Itoa(channel.Id))
+
+	cache, err := model.GetUserCache(testUserID)
+	if err != nil {
+		return testResult{context: c, localErr: err}
+	}
+	cache.WriteContext(c)
+	c.Set("id", testUserID)
+	group, _ := model.GetUserGroup(testUserID, false)
+	c.Set("group", group)
+
+	maxAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	if maxAPIError != nil {
+		return testResult{context: c, localErr: maxAPIError, maxAPIError: maxAPIError}
+	}
+
+	RelayTask(c)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(resp.Body)
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return testResult{context: c, localErr: fmt.Errorf("video task test failed: %s", message)}
+	}
+
+	return testResult{context: c}
 }
 
 func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Request) error {

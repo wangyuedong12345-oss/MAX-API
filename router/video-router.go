@@ -1,11 +1,48 @@
 package router
 
 import (
+	"strings"
+
 	"github.com/MAX-API-Next/MAX-API/controller"
 	"github.com/MAX-API-Next/MAX-API/middleware"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 
 	"github.com/gin-gonic/gin"
 )
+
+func relayTaskSubmitOrFetch(c *gin.Context) {
+	if c.GetInt("relay_mode") == relayconstant.RelayModeVideoFetchByID {
+		controller.RelayTaskFetch(c)
+		return
+	}
+	controller.RelayTask(c)
+}
+
+func relayTaskFetchFromVideoGenerations(c *gin.Context) {
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		taskID = c.Param("video_id")
+	}
+	if taskID == "" {
+		taskID = c.Query("task_id")
+	}
+	if taskID == "" {
+		taskID = c.Query("id")
+	}
+	if taskID == "" {
+		taskID = c.Query("video_id")
+	}
+	if taskID == "" {
+		taskPath := strings.Trim(c.Param("task_path"), "/")
+		if taskPath != "" {
+			taskID = strings.Split(taskPath, "/")[0]
+		}
+	}
+	if taskID != "" {
+		c.Set("task_id", taskID)
+	}
+	controller.RelayTaskFetch(c)
+}
 
 func SetVideoRouter(router *gin.Engine) {
 	// Video proxy: accepts either session auth (dashboard) or token auth (API clients)
@@ -20,15 +57,31 @@ func SetVideoRouter(router *gin.Engine) {
 	videoV1Router.Use(middleware.RouteTag("relay"))
 	videoV1Router.Use(middleware.TokenAuth(), middleware.Distribute())
 	{
-		videoV1Router.POST("/video/generations", controller.RelayTask)
+		videoV1Router.GET("/tasks/:task_id", relayTaskFetchFromVideoGenerations)
+		videoV1Router.POST("/tasks/:task_id", relayTaskFetchFromVideoGenerations)
+		videoV1Router.POST("/video/generations", relayTaskSubmitOrFetch)
+		videoV1Router.POST("/video/generations/:task_id", controller.RelayTaskFetch)
 		videoV1Router.GET("/video/generations/:task_id", controller.RelayTaskFetch)
 		videoV1Router.POST("/videos/:video_id/remix", controller.RelayTask)
 	}
 	// openai compatible API video routes
 	// docs: https://platform.openai.com/docs/api-reference/videos/create
 	{
-		videoV1Router.POST("/videos", controller.RelayTask)
+		videoV1Router.POST("/videos/generations", relayTaskSubmitOrFetch)
+		videoV1Router.POST("/videos/generations/*task_path", relayTaskFetchFromVideoGenerations)
+		videoV1Router.POST("/videos", relayTaskSubmitOrFetch)
+		videoV1Router.POST("/videos/:video_id", relayTaskFetchFromVideoGenerations)
+		videoV1Router.GET("/videos/generations", relayTaskFetchFromVideoGenerations)
+		videoV1Router.GET("/videos/generations/*task_path", relayTaskFetchFromVideoGenerations)
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
+	}
+
+	agnesRouter := router.Group("/")
+	agnesRouter.Use(middleware.RouteTag("relay"))
+	agnesRouter.Use(middleware.TokenAuth(), middleware.Distribute())
+	{
+		agnesRouter.GET("/agnesapi", relayTaskFetchFromVideoGenerations)
+		agnesRouter.POST("/agnesapi", relayTaskFetchFromVideoGenerations)
 	}
 
 	klingV1Router := router.Group("/kling/v1")

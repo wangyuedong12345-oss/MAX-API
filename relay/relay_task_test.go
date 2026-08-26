@@ -323,3 +323,46 @@ func TestTerminalTaskStatusClassification(t *testing.T) {
 	require.False(t, isTerminalTaskStatus(model.TaskStatusInProgress))
 	require.False(t, isTerminalTaskStatus(model.TaskStatusNotStart))
 }
+
+func TestBuildAgnesVideoTaskFetchResponseIncludesCompletionAliases(t *testing.T) {
+	body, err := buildAgnesVideoTaskFetchResponse(&model.Task{
+		TaskID:   "task_123",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		PrivateData: model.TaskPrivateData{
+			ResultURL: "https://example.com/video.mp4",
+		},
+	}, "/agnesapi")
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, common.Unmarshal(body, &got))
+	require.Equal(t, "success", got["code"])
+	require.Equal(t, "completed", got["status"])
+	require.Equal(t, "succeed", got["task_status"])
+	require.EqualValues(t, 100, got["progress"])
+	require.Equal(t, "https://example.com/video.mp4", got["url"])
+
+	data, ok := got["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "task_123", data["task_id"])
+	require.Equal(t, "completed", data["status"])
+	require.Equal(t, "succeed", data["task_status"])
+	require.Equal(t, "https://example.com/video.mp4", data["video_url"])
+}
+
+func TestBuildAgnesVideoTaskFetchResponseUsesV1TaskStatusAlias(t *testing.T) {
+	body, err := buildAgnesVideoTaskFetchResponse(&model.Task{
+		TaskID: "task_123",
+		Status: model.TaskStatusSuccess,
+		PrivateData: model.TaskPrivateData{
+			ResultURL: "https://example.com/video.mp4",
+		},
+	}, "/v1/tasks/task_123")
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, common.Unmarshal(body, &got))
+	require.Equal(t, "completed", got["status"])
+	require.Equal(t, "succeed", got["task_status"])
+}

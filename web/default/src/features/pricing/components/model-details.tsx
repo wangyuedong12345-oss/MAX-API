@@ -71,6 +71,7 @@ import {
   formatFixedPrice,
   formatGroupPrice,
   formatTaskRateCardRange,
+  formatTaskRateCardTotalPrice,
   formatTaskRateCardUnitPrice,
 } from '../lib/price'
 import type {
@@ -739,6 +740,232 @@ function TaskRateCardBreakdown(props: {
   )
 }
 
+type SeedanceMiniPricingScenario = {
+  key: string
+  labelKey: string
+  hasVideoInput: boolean
+  inputSeconds?: number
+  outputSeconds: number
+  rows: {
+    resolution: string
+    aspectRatio: string
+    tokenUsage: number
+  }[]
+}
+
+const SEEDANCE_MINI_MODEL_NAMES = new Set([
+  'doubao-seedance-2.0-mini',
+  'doubao-seedance-2-0-mini-260615',
+])
+
+const SEEDANCE_MINI_PRICING: SeedanceMiniPricingScenario[] = [
+  {
+    key: 'no-video',
+    labelKey: 'No video input',
+    hasVideoInput: false,
+    outputSeconds: 5,
+    rows: [
+      {
+        resolution: '480P',
+        aspectRatio: '16:9',
+        tokenUsage: 50_220,
+      },
+      {
+        resolution: '720P',
+        aspectRatio: '16:9',
+        tokenUsage: 108_000,
+      },
+    ],
+  },
+  {
+    key: 'with-video',
+    labelKey: 'With video input',
+    hasVideoInput: true,
+    inputSeconds: 10,
+    outputSeconds: 10,
+    rows: [
+      {
+        resolution: '480P',
+        aspectRatio: '16:9',
+        tokenUsage: 200_880,
+      },
+      {
+        resolution: '720P',
+        aspectRatio: '16:9',
+        tokenUsage: 432_000,
+      },
+    ],
+  },
+]
+
+const seedanceMiniNumberFormatter = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 0,
+})
+
+function isSeedanceMiniModel(modelName: string): boolean {
+  const normalized = modelName.trim().toLowerCase()
+  return SEEDANCE_MINI_MODEL_NAMES.has(normalized)
+}
+
+function getSeedanceMiniRateCardUnitPrice(
+  model: PricingModel,
+  resolution: string,
+  hasVideoInput: boolean
+): number | null {
+  const normalizedResolution = resolution.trim().toLowerCase()
+  const expectedVideoInput = hasVideoInput ? 'true' : 'false'
+  const row = model.task_rate_card?.rows.find((item) => {
+    const match = item.match || {}
+    return (
+      match.resolution?.toLowerCase() === normalizedResolution &&
+      match.has_video_input?.toLowerCase() === expectedVideoInput
+    )
+  })
+
+  return Number.isFinite(row?.unit_price) ? Number(row?.unit_price) : null
+}
+
+function SeedanceMiniPricingBreakdown(props: {
+  model: PricingModel
+  groupRatio: Record<string, number>
+  usableGroup: Record<string, { desc: string; ratio: number | string }>
+  priceRate: number
+  usdExchangeRate: number
+  showRechargePrice: boolean
+}) {
+  const { t } = useTranslation()
+
+  if (!isSeedanceMiniModel(props.model.model_name)) {
+    return null
+  }
+
+  const availableGroups = getAvailableGroups(props.model, props.usableGroup)
+  if (availableGroups.length === 0) return null
+
+  const thClass =
+    'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
+
+  return (
+    <section>
+      <SectionTitle>{t('Seedance Mini actual pricing')}</SectionTitle>
+      <div className='space-y-3'>
+        {SEEDANCE_MINI_PRICING.map((scenario) => (
+          <div key={scenario.key} className='overflow-hidden rounded-lg border'>
+            <div className='bg-muted/20 flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2'>
+              <div className='text-sm font-medium'>{t(scenario.labelKey)}</div>
+              <div className='text-muted-foreground text-xs'>
+                {t('Calculated with current group ratios')}
+              </div>
+            </div>
+            <div className='overflow-x-auto'>
+              <Table className='text-sm'>
+                <TableHeader>
+                  <TableRow className='hover:bg-transparent'>
+                    <TableHead className={thClass}>{t('Group')}</TableHead>
+                    <TableHead className={thClass}>{t('Ratio')}</TableHead>
+                    <TableHead className={thClass}>{t('Resolution')}</TableHead>
+                    <TableHead className={thClass}>
+                      {t('Aspect ratio')}
+                    </TableHead>
+                    {scenario.inputSeconds != null && (
+                      <TableHead className={`${thClass} text-right`}>
+                        {t('Input seconds')}
+                      </TableHead>
+                    )}
+                    <TableHead className={`${thClass} text-right`}>
+                      {t('Output seconds')}
+                    </TableHead>
+                    <TableHead className={`${thClass} text-right`}>
+                      {t('Token usage')}
+                    </TableHead>
+                    <TableHead className={`${thClass} text-right`}>
+                      {t('Video price')}
+                    </TableHead>
+                    <TableHead className={`${thClass} text-right`}>
+                      {t('Approx. per second')}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {availableGroups.flatMap((group) =>
+                    scenario.rows.map((row) => {
+                      const groupRatio = props.groupRatio[group] || 1
+                      const unitPrice = getSeedanceMiniRateCardUnitPrice(
+                        props.model,
+                        row.resolution,
+                        scenario.hasVideoInput
+                      )
+                      return (
+                        <TableRow
+                          key={`${scenario.key}-${group}-${row.resolution}`}
+                        >
+                          <TableCell className='py-2.5'>
+                            <GroupBadge group={group} size='sm' />
+                          </TableCell>
+                          <TableCell className='text-muted-foreground py-2.5 font-mono'>
+                            {groupRatio}x
+                          </TableCell>
+                          <TableCell className='py-2.5 font-mono font-semibold'>
+                            {row.resolution}
+                          </TableCell>
+                          <TableCell className='text-muted-foreground py-2.5 font-mono'>
+                            {row.aspectRatio}
+                          </TableCell>
+                          {scenario.inputSeconds != null && (
+                            <TableCell className='text-muted-foreground py-2.5 text-right font-mono tabular-nums'>
+                              {scenario.inputSeconds}s
+                            </TableCell>
+                          )}
+                          <TableCell className='text-muted-foreground py-2.5 text-right font-mono tabular-nums'>
+                            {scenario.outputSeconds}s
+                          </TableCell>
+                          <TableCell className='py-2.5 text-right font-mono tabular-nums'>
+                            {seedanceMiniNumberFormatter.format(row.tokenUsage)}
+                          </TableCell>
+                          <TableCell className='py-2.5 text-right font-mono tabular-nums'>
+                            {unitPrice == null
+                              ? '-'
+                              : formatTaskRateCardTotalPrice(
+                                  unitPrice,
+                                  scenario.outputSeconds,
+                                  props.showRechargePrice,
+                                  props.priceRate,
+                                  props.usdExchangeRate,
+                                  groupRatio
+                                )}
+                            <span className='text-muted-foreground/50 ml-1 text-xs'>
+                              / {t('video')}
+                            </span>
+                          </TableCell>
+                          <TableCell className='py-2.5 text-right font-mono tabular-nums'>
+                            {unitPrice == null
+                              ? '-'
+                              : `≈ ${formatTaskRateCardTotalPrice(
+                                  unitPrice,
+                                  1,
+                                  props.showRechargePrice,
+                                  props.priceRate,
+                                  props.usdExchangeRate,
+                                  groupRatio
+                                )}`}
+                            <span className='text-muted-foreground/50 ml-1 text-xs'>
+                              / {t('sec')}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // ----------------------------------------------------------------------------
 // Auto group chain (used inside group pricing section)
 // ----------------------------------------------------------------------------
@@ -1243,6 +1470,14 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
                 showRechargePrice={showRechargePrice}
               />
             )}
+            <SeedanceMiniPricingBreakdown
+              model={props.model}
+              groupRatio={props.groupRatio}
+              usableGroup={props.usableGroup}
+              priceRate={props.priceRate}
+              usdExchangeRate={props.usdExchangeRate}
+              showRechargePrice={showRechargePrice}
+            />
             {isDynamic && (
               <DynamicPricingBreakdown billingExpr={props.model.billing_expr} />
             )}

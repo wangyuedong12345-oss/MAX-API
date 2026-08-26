@@ -71,6 +71,8 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeImagesGenerations
 	} else if strings.HasPrefix(path, "/v1/images/edits") {
 		relayMode = RelayModeImagesEdits
+	} else if path == "/v1/videos" || path == "/v1/videos/generations" || path == "/v1/video/generations" {
+		relayMode = RelayModeVideoSubmit
 	} else if strings.HasPrefix(path, "/v1/edits") {
 		relayMode = RelayModeEdits
 	} else if strings.HasPrefix(path, "/v1/responses/compact") {

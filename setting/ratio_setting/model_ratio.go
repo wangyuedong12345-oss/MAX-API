@@ -280,6 +280,8 @@ var defaultModelRatio = map[string]float64{
 	"deepseek-ai/DeepSeek-R1":                 0.8,
 	"deepseek-ai/DeepSeek-V3-0324":            0.8,
 	"deepseek-ai/DeepSeek-V3.1":               0.8,
+	"Doubao-Seedance-2.0-mini":                1.6428571428571428, // ￥23 / 1M video tokens
+	"doubao-seedance-2-0-mini-260615":         1.6428571428571428, // ￥23 / 1M video tokens
 }
 
 var defaultModelPrice = map[string]float64{

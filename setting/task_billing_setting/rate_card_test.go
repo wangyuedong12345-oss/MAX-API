@@ -66,6 +66,31 @@ func TestCalculateKlingV3OmniRejectsUnpricedVideoAudio(t *testing.T) {
 	}
 }
 
+func TestDefaultRateCardsIncludeSeedanceMini(t *testing.T) {
+	cards := defaultRateCards()
+
+	displayCard, ok := cards["Doubao-Seedance-2.0-mini"]
+	require.True(t, ok)
+	upstreamCard, ok := cards["doubao-seedance-2-0-mini-260615"]
+	require.True(t, ok)
+	require.Equal(t, displayCard, upstreamCard)
+	require.Equal(t, "second", displayCard.Unit)
+	require.Equal(t, "duration", displayCard.QuantityField)
+	require.Equal(t, "720p", displayCard.Defaults["resolution"])
+	require.Len(t, displayCard.Rows, 4)
+
+	var matched *RateCardRow
+	for i := range displayCard.Rows {
+		row := &displayCard.Rows[i]
+		if row.Match["resolution"] == "720p" && row.Match["has_video_input"] == "true" {
+			matched = row
+			break
+		}
+	}
+	require.NotNil(t, matched)
+	require.InDelta(t, 0.0864, matched.UnitPrice, 1e-9)
+}
+
 func TestCalculateUnknownModelFallsBack(t *testing.T) {
 	input := types.TaskBillingInput{Model: "unknown-video-model"}
 	input.SetNumber("duration", 5)

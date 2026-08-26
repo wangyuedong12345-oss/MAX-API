@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
@@ -42,6 +43,85 @@ func TestGetModelFromJSONBodyPreservesProviderRoutingFields(t *testing.T) {
 	require.Equal(t, "cost", gjson.GetBytes(body, "routing_strategy").String())
 	require.Equal(t, "price", gjson.GetBytes(body, "provider.sort").String())
 	require.Equal(t, "openai", gjson.GetBytes(body, "provider.order.0").String())
+}
+
+func TestOpenAIVideoPostWithTaskIDRoutesAsFetch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name        string
+		path        string
+		body        string
+		contentType string
+		params      gin.Params
+	}{
+		{
+			name:        "body video_id",
+			path:        "/v1/videos/generations",
+			body:        `{"video_id":"task_123"}`,
+			contentType: "application/json",
+		},
+		{
+			name:   "path task_id",
+			path:   "/v1/videos/generations/task_123",
+			params: gin.Params{{Key: "task_path", Value: "/task_123"}},
+		},
+		{
+			name:   "single video path",
+			path:   "/v1/videos/task_123",
+			params: gin.Params{{Key: "video_id", Value: "task_123"}},
+		},
+		{
+			name:   "legacy single video path",
+			path:   "/v1/video/generations/task_123",
+			params: gin.Params{{Key: "task_id", Value: "task_123"}},
+		},
+		{
+			name:   "agnes query path",
+			path:   "/agnesapi?video_id=task_123",
+			params: gin.Params{},
+		},
+		{
+			name:   "agnes v1 tasks path",
+			path:   "/v1/tasks/task_123?language=zh",
+			params: gin.Params{{Key: "task_id", Value: "task_123"}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, test.path, bytes.NewBufferString(test.body))
+			if test.contentType != "" {
+				ctx.Request.Header.Set("Content-Type", test.contentType)
+			}
+			ctx.Params = test.params
+			t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+
+			modelRequest, shouldSelectChannel, err := getModelRequest(ctx)
+			require.NoError(t, err)
+
+			require.False(t, shouldSelectChannel)
+			require.Empty(t, modelRequest.Model)
+			require.Equal(t, relayconstant.RelayModeVideoFetchByID, ctx.GetInt("relay_mode"))
+			require.Equal(t, "task_123", ctx.GetString("task_id"))
+		})
+	}
+}
+
+func TestOpenAIVideoPostWithModelRoutesAsSubmit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewBufferString(`{"model":"Doubao-Seedance-2.0-mini","prompt":"test"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+
+	modelRequest, shouldSelectChannel, err := getModelRequest(ctx)
+	require.NoError(t, err)
+
+	require.True(t, shouldSelectChannel)
+	require.Equal(t, "Doubao-Seedance-2.0-mini", modelRequest.Model)
+	require.Equal(t, relayconstant.RelayModeVideoSubmit, ctx.GetInt("relay_mode"))
+	require.Empty(t, ctx.GetString("task_id"))
 }
 
 func TestPlaygroundExplicitGroupBypassesStoredTokenRoutePlan(t *testing.T) {

@@ -172,6 +172,7 @@ func TryHandleConfiguredSubmitResponse(c *gin.Context, responseBody []byte, info
 
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
+	ov.VideoID = info.PublicTaskID
 	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
@@ -225,6 +226,7 @@ func ConvertConfiguredTaskToOpenAIVideo(originTask *model.Task) ([]byte, bool, e
 	}
 	openAIVideo := dto.NewOpenAIVideo()
 	openAIVideo.ID = originTask.TaskID
+	openAIVideo.VideoID = originTask.TaskID
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)

@@ -522,7 +522,7 @@ var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
 	respBuilder, ok := fetchRespBuilders[relayMode]
 	if !ok {
-		taskResp = service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
+		return service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
 	}
 
 	respBody, taskErr := respBuilder(c)
@@ -611,12 +611,21 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
+	isOpenAIVideoAPI := c.Request.URL.Path == "/v1/videos" || strings.HasPrefix(c.Request.URL.Path, "/v1/videos/")
+	isAgnesCompatAPI := isAgnesVideoTaskFetchPath(c.Request.URL.Path)
 	isKlingOfficialAPI := c.GetBool("kling_official_route") || strings.HasPrefix(c.Request.RequestURI, "/kling/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
 	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
 		respBody = realtimeResp
+		return
+	}
+
+	if isAgnesCompatAPI {
+		respBody, err = buildAgnesVideoTaskFetchResponse(originTask, c.Request.URL.Path)
+		if err != nil {
+			taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -676,6 +685,121 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
 	}
 	return
+}
+
+func isAgnesVideoTaskFetchPath(path string) bool {
+	return path == "/agnesapi" || strings.HasPrefix(path, "/v1/tasks/")
+}
+
+func buildAgnesVideoTaskFetchResponse(task *model.Task, requestPath string) ([]byte, error) {
+	url := task.GetResultURL()
+	status := agnesPrimaryStatus(task.Status, requestPath)
+	progress := 0
+	if status == "completed" || status == "success" || status == "failed" {
+		progress = 100
+	} else if strings.TrimSpace(task.Progress) != "" {
+		progress = 30
+	}
+
+	data := map[string]any{
+		"id":            task.TaskID,
+		"video_id":      task.TaskID,
+		"task_id":       task.TaskID,
+		"status":        status,
+		"task_status":   agnesTaskStatus(status),
+		"state":         agnesState(status),
+		"progress":      progress,
+		"progress_text": task.Progress,
+		"url":           url,
+		"video_url":     url,
+		"result_url":    url,
+		"format":        "mp4",
+		"error":         nil,
+		"metadata": map[string]any{
+			"url":       url,
+			"video_url": url,
+		},
+		"result": map[string]any{
+			"url":       url,
+			"video_url": url,
+		},
+		"output": map[string]any{
+			"video_url":   url,
+			"task_status": agnesTaskStatus(status),
+		},
+	}
+	if task.Status == model.TaskStatusFailure {
+		data["error"] = map[string]any{
+			"message": task.FailReason,
+			"code":    "upstream_error",
+		}
+	}
+
+	return common.Marshal(map[string]any{
+		"code":        "success",
+		"message":     "",
+		"data":        data,
+		"id":          task.TaskID,
+		"video_id":    task.TaskID,
+		"task_id":     task.TaskID,
+		"status":      status,
+		"task_status": agnesTaskStatus(status),
+		"state":       agnesState(status),
+		"progress":    progress,
+		"url":         url,
+		"video_url":   url,
+		"result":      data["result"],
+		"output":      data["output"],
+	})
+}
+
+func agnesPrimaryStatus(status model.TaskStatus, requestPath string) string {
+	if strings.HasPrefix(requestPath, "/v1/tasks/") {
+		switch status {
+		case model.TaskStatusSuccess:
+			return "completed"
+		case model.TaskStatusFailure:
+			return "failed"
+		case model.TaskStatusQueued, model.TaskStatusSubmitted:
+			return "queued"
+		default:
+			return "running"
+		}
+	}
+	switch status {
+	case model.TaskStatusSuccess:
+		return "completed"
+	case model.TaskStatusFailure:
+		return "failed"
+	case model.TaskStatusQueued, model.TaskStatusSubmitted:
+		return "queued"
+	default:
+		return "in_progress"
+	}
+}
+
+func agnesTaskStatus(status string) string {
+	switch status {
+	case "completed", "success":
+		return "succeed"
+	case "failed":
+		return "failed"
+	case "queued":
+		return "submitted"
+	default:
+		return "processing"
+	}
+}
+
+func agnesState(status string) string {
+	switch status {
+	case "completed", "success":
+		return "success"
+	case "failed":
+		return "failed"
+	default:
+		return "running"
+	}
 }
 
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。

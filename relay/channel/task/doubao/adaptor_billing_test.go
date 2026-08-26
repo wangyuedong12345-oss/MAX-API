@@ -1,6 +1,7 @@
 package doubao
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,14 @@ func TestGetVideoInputRatioUsesResolutionAndVideoInput(t *testing.T) {
 	ratio, ok = GetVideoInputRatio("doubao-seedance-2-0-fast-260128", "4k", true)
 	require.True(t, ok)
 	assert.InDelta(t, 22.0/37.0, ratio, 1e-9)
+
+	ratio, ok = GetVideoInputRatio("doubao-seedance-2-0-mini-260615", "720p", false)
+	require.True(t, ok)
+	assert.InDelta(t, 1.0, ratio, 1e-9)
+
+	ratio, ok = GetVideoInputRatio("doubao-seedance-2-0-mini-260615", "720p", true)
+	require.True(t, ok)
+	assert.InDelta(t, 14.0/23.0, ratio, 1e-9)
 }
 
 func TestEstimateBillingUsesResolutionAndVideoInput(t *testing.T) {
@@ -410,6 +420,150 @@ func TestConvertToRequestPayloadUsesTopLevelSeedanceFields(t *testing.T) {
 	assert.Contains(t, string(data), `"watermark":false`)
 }
 
+func TestConvertToRequestPayloadNormalizesSeedanceReferenceImages(t *testing.T) {
+	var req relaycommon.TaskSubmitReq
+	err := common.Unmarshal([]byte(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"prompt": "animate the reference",
+		"input_reference": "https://example.com/input-reference.png",
+		"image": "https://example.com/image.png",
+		"images": ["https://example.com/a.png"],
+		"reference_images": ["https://example.com/ref.png"]
+	}`), &req)
+	require.NoError(t, err)
+
+	payload, err := (&TaskAdaptor{}).convertToRequestPayload(&req)
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+
+	var imageURLs []string
+	for _, item := range payload.Content {
+		if item.Type == "image_url" && item.ImageURL != nil {
+			imageURLs = append(imageURLs, item.ImageURL.URL)
+		}
+	}
+	assert.Equal(t, []string{
+		"https://example.com/a.png",
+		"https://example.com/input-reference.png",
+		"https://example.com/image.png",
+		"https://example.com/ref.png",
+	}, imageURLs)
+}
+
+func TestConvertToRequestPayloadAcceptsAIImageURLAliases(t *testing.T) {
+	var req relaycommon.TaskSubmitReq
+	err := common.Unmarshal([]byte(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"prompt": "animate the reference",
+		"imageUrls": ["https://example.com/ai-canvas.png"],
+		"referenceImageUrls": ["https://example.com/character.png"]
+	}`), &req)
+	require.NoError(t, err)
+
+	payload, err := (&TaskAdaptor{}).convertToRequestPayload(&req)
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+
+	var imageURLs []string
+	for _, item := range payload.Content {
+		if item.Type == "image_url" && item.ImageURL != nil {
+			imageURLs = append(imageURLs, item.ImageURL.URL)
+		}
+	}
+	assert.Equal(t, []string{
+		"https://example.com/ai-canvas.png",
+		"https://example.com/character.png",
+	}, imageURLs)
+}
+
+func TestConvertToRequestPayloadKeepsImagesWhenContentHasOnlyText(t *testing.T) {
+	var req relaycommon.TaskSubmitReq
+	err := common.Unmarshal([]byte(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"content": [
+			{ "type": "text", "text": "animate this image" }
+		],
+		"images": ["https://example.com/reference.png"],
+		"duration": 10
+	}`), &req)
+	require.NoError(t, err)
+
+	payload, err := (&TaskAdaptor{}).convertToRequestPayload(&req)
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+
+	var hasText bool
+	var imageURLs []string
+	for _, item := range payload.Content {
+		if item.Type == "text" && item.Text == "animate this image" {
+			hasText = true
+		}
+		if item.Type == "image_url" && item.ImageURL != nil {
+			imageURLs = append(imageURLs, item.ImageURL.URL)
+		}
+	}
+	assert.True(t, hasText)
+	assert.Equal(t, []string{"https://example.com/reference.png"}, imageURLs)
+}
+
+func TestNormalizeSeedanceMiniTextToVideoDuration(t *testing.T) {
+	payload := &requestPayload{
+		Model: "doubao-seedance-2-0-mini",
+		Content: []ContentItem{
+			{Type: "text", Text: "a calm sea"},
+		},
+		Duration: lo.ToPtr(dto.IntValue(10)),
+	}
+
+	normalizeSeedanceMiniPayload(payload)
+
+	require.NotNil(t, payload.Duration)
+	assert.Equal(t, 5, int(*payload.Duration))
+}
+
+func TestNormalizeSeedanceMiniDurationKeepsImageToVideoDuration(t *testing.T) {
+	payload := &requestPayload{
+		Model: "doubao-seedance-2-0-mini-260615",
+		Content: []ContentItem{
+			{Type: "text", Text: "animate this image"},
+			{Type: "image_url", ImageURL: &MediaURL{URL: "https://example.com/reference.png"}},
+		},
+		Duration: lo.ToPtr(dto.IntValue(10)),
+	}
+
+	normalizeSeedanceMiniPayload(payload)
+
+	require.NotNil(t, payload.Duration)
+	assert.Equal(t, 10, int(*payload.Duration))
+}
+
+func TestDoResponseIncludesVideoIDForOpenAIVideoCompatibility(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			PublicTaskID: "task_public",
+		},
+		OriginModelName: "Doubao-Seedance-2.0-mini",
+	}
+	resp := &http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"id":"upstream_task"}`)),
+	}
+
+	taskID, _, taskErr := (&TaskAdaptor{}).DoResponse(c, resp, info)
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, "upstream_task", taskID)
+	var body map[string]any
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "task_public", body["id"])
+	assert.Equal(t, "task_public", body["video_id"])
+	assert.Equal(t, "task_public", body["task_id"])
+	assert.Equal(t, "video", body["object"])
+	assert.Equal(t, "Doubao-Seedance-2.0-mini", body["model"])
+	assert.Equal(t, "queued", body["status"])
+}
+
 func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing.T) {
 	var req relaycommon.TaskSubmitReq
 	err := common.Unmarshal([]byte(`{
@@ -477,6 +631,35 @@ func TestValidateConfiguredTaskProtocolAllowsPromptlessMediaRequest(t *testing.T
 	require.Equal(t, []string{"https://example.com/frame.png"}, req.Images)
 }
 
+func TestValidateConfiguredTaskProtocolAcceptsAIImageURLAliases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"prompt": "让参考图动起来",
+		"imageUrls": ["https://example.com/reference.png"]
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true},
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				TaskProtocol: taskcommon.TaskProtocolGenericVideo,
+			},
+		},
+	}
+
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
+
+	require.Nil(t, taskErr)
+	require.Equal(t, "generate", info.Action)
+	req, err := relaycommon.GetTaskRequest(c)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://example.com/reference.png"}, req.Images)
+}
+
 func TestValidateRequestAllowsOfficialContentWithoutTopLevelPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -497,13 +680,55 @@ func TestValidateRequestAllowsOfficialContentWithoutTopLevelPrompt(t *testing.T)
 	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
 
 	require.Nil(t, taskErr)
-	require.Equal(t, "generate", info.Action)
+	require.Equal(t, "textGenerate", info.Action)
 	req, err := relaycommon.GetTaskRequest(c)
 	require.NoError(t, err)
 	require.Len(t, req.Content, 1)
 	assert.Equal(t, "official prompt", req.Content[0]["text"])
 	require.NotNil(t, req.GenerateAudio)
 	assert.False(t, *req.GenerateAudio)
+}
+
+func TestValidateRequestMarksDoubaoPromptOnlyAsTextToVideo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"prompt": "一只狗在奔跑",
+		"ratio": "16:9"
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
+
+	require.Nil(t, taskErr)
+	require.Equal(t, "textGenerate", info.Action)
+}
+
+func TestValidateRequestMarksDoubaoOfficialImageContentAsImageToVideo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"content": [
+			{ "type": "text", "text": "让参考图动起来" },
+			{ "type": "image_url", "image_url": { "url": "https://example.com/frame.png" } }
+		]
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
+
+	require.Nil(t, taskErr)
+	require.Equal(t, "generate", info.Action)
 }
 
 func TestParseSeedanceMediaTaskResultByShape(t *testing.T) {
@@ -541,4 +766,5 @@ func TestConvertSeedanceMediaTaskToOpenAIVideoByShape(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"url":"https://example.com/result.mp4"`)
 	assert.Contains(t, string(body), `"task_id":"task_123"`)
+	assert.Contains(t, string(body), `"video_id":"task_123"`)
 }

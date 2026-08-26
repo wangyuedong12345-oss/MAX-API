@@ -28,3 +28,10 @@ func TestSeedreamDisplayNameEndpointTypesPreferImageGeneration(t *testing.T) {
 	require.NotEmpty(t, endpointTypes)
 	require.Equal(t, constant.EndpointTypeImageGeneration, endpointTypes[0])
 }
+
+func TestSeedanceEndpointTypesPreferOpenAIVideo(t *testing.T) {
+	endpointTypes := GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "Doubao-Seedance-2.0-mini")
+
+	require.NotEmpty(t, endpointTypes)
+	require.Equal(t, constant.EndpointTypeOpenAIVideo, endpointTypes[0])
+}

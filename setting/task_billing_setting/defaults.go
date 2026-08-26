@@ -25,12 +25,29 @@ func defaultRateCards() map[string]RateCard {
 		row("pro_video", 1.2, "quality", "pro", "has_video_input", "true"),
 		row("pro_no_video", 0.8, "quality", "pro", "has_video_input", "false"),
 	}
+	seedanceMiniRows := []RateCardRow{
+		row("480p_no_video_input", 0.03300171428571429, "resolution", "480p", "has_video_input", "false"),
+		row("720p_no_video_input", 0.07097142857142857, "resolution", "720p", "has_video_input", "false"),
+		row("480p_video_input", 0.040176, "resolution", "480p", "has_video_input", "true"),
+		row("720p_video_input", 0.0864, "resolution", "720p", "has_video_input", "true"),
+	}
+	seedanceMiniCard := perSecondCard("doubao", seedanceMiniRows)
+	seedanceMiniCard.Defaults = map[string]string{
+		"capability":      "video_generation",
+		"generate_audio":  "false",
+		"has_audio":       "false",
+		"has_video_input": "false",
+		"ratio":           "16:9",
+		"resolution":      "720p",
+	}
 	return map[string]RateCard{
 		"kling/kling-v3-video-generation":      perSecondCard("kling", v3Rows),
 		"kling-v3":                             perSecondCard("kling", v3Rows),
 		"kling/kling-v3-omni-video-generation": perSecondCard("kling", v3OmniRows),
 		"kling-v3-omni":                        perSecondCard("kling", v3OmniRows),
 		"kling-video-o1":                       perSecondCard("kling", o1Rows),
+		"Doubao-Seedance-2.0-mini":             seedanceMiniCard,
+		"doubao-seedance-2-0-mini-260615":      seedanceMiniCard,
 	}
 }
 

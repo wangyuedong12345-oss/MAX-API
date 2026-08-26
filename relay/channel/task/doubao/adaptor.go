@@ -128,18 +128,13 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		if strings.TrimSpace(req.Model) == "" {
 			return service.TaskErrorWrapperLocal(fmt.Errorf("model field is required"), "missing_model", http.StatusBadRequest)
 		}
-		if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
-			req.Images = []string{req.Image}
-		}
-		if len(req.Images) == 0 && len(req.ReferenceImages) > 0 {
-			req.Images = append([]string{}, req.ReferenceImages...)
-		}
-		relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, req)
+		normalizeReferenceImages(&req)
+		relaycommon.StoreTaskRequest(c, info, doubaoTaskAction(&req), req)
 		return nil
 	}
 
 	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
-		return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+		return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
 	}
 
 	var req relaycommon.TaskSubmitReq
@@ -152,11 +147,49 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if strings.TrimSpace(req.Prompt) == "" && !hasUsableOfficialContent(req.Content) {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("prompt or content is required"), "invalid_request", http.StatusBadRequest)
 	}
-	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
-		req.Images = []string{req.Image}
-	}
-	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, req)
+	normalizeReferenceImages(&req)
+	relaycommon.StoreTaskRequest(c, info, doubaoTaskAction(&req), req)
 	return nil
+}
+
+func doubaoTaskAction(req *relaycommon.TaskSubmitReq) string {
+	if req == nil {
+		return constant.TaskActionTextGenerate
+	}
+	if req.HasImage() ||
+		strings.TrimSpace(req.Image) != "" ||
+		strings.TrimSpace(req.InputReference) != "" ||
+		strings.TrimSpace(req.EndImage) != "" ||
+		len(req.ReferenceImages) > 0 ||
+		hasMediaInOfficialContent(req.Content) ||
+		hasVideoInMetadata(req.Metadata) {
+		return constant.TaskActionGenerate
+	}
+	return constant.TaskActionTextGenerate
+}
+
+func hasMediaInOfficialContent(content []map[string]any) bool {
+	items, err := topLevelContentItems(content)
+	if err != nil {
+		return false
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "image_url":
+			if item.ImageURL != nil && strings.TrimSpace(item.ImageURL.URL) != "" {
+				return true
+			}
+		case "video_url":
+			if item.VideoURL != nil && strings.TrimSpace(item.VideoURL.URL) != "" {
+				return true
+			}
+		case "audio_url":
+			if item.AudioURL != nil && strings.TrimSpace(item.AudioURL.URL) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -325,6 +358,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	} else {
 		info.UpstreamModelName = body.Model
 	}
+	normalizeSeedanceMiniPayload(body)
 	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -364,6 +398,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
+	ov.VideoID = info.PublicTaskID
 	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
@@ -407,12 +442,14 @@ func (a *TaskAdaptor) GetChannelName() string {
 }
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*requestPayload, error) {
+	normalizeReferenceImages(req)
 	r := requestPayload{
 		Model:   req.Model,
 		Content: []ContentItem{},
 	}
 
-	// Add images if present
+	// Add simple reference image fields first; official top-level content below
+	// is merged instead of replacing these items.
 	if req.HasImage() {
 		for _, imgURL := range req.Images {
 			r.Content = append(r.Content, ContentItem{
@@ -447,6 +484,62 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	return &r, nil
 }
 
+func normalizeSeedanceMiniPayload(payload *requestPayload) {
+	if payload == nil || !isSeedanceMiniModel(payload.Model) || seedanceContentHasMedia(payload.Content) {
+		return
+	}
+	payload.Duration = lo.ToPtr(dto.IntValue(5))
+}
+
+func isSeedanceMiniModel(modelName string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "doubao-seedance-2.0-mini", "doubao-seedance-2-0-mini", "doubao-seedance-2-0-mini-260615":
+		return true
+	default:
+		return false
+	}
+}
+
+func seedanceContentHasMedia(content []ContentItem) bool {
+	for _, item := range content {
+		if item.ImageURL != nil && strings.TrimSpace(item.ImageURL.URL) != "" {
+			return true
+		}
+		if item.VideoURL != nil && strings.TrimSpace(item.VideoURL.URL) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeReferenceImages(req *relaycommon.TaskSubmitReq) {
+	if req == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(req.Images)+len(req.ReferenceImages)+2)
+	images := make([]string, 0, len(req.Images)+len(req.ReferenceImages)+2)
+	appendImage := func(value string) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			return
+		}
+		seen[trimmed] = struct{}{}
+		images = append(images, trimmed)
+	}
+	for _, image := range req.Images {
+		appendImage(image)
+	}
+	appendImage(req.InputReference)
+	appendImage(req.Image)
+	for _, image := range req.ReferenceImages {
+		appendImage(image)
+	}
+	req.Images = images
+}
+
 func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayload) error {
 	if req == nil || r == nil {
 		return nil
@@ -456,7 +549,7 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 		if err != nil {
 			return err
 		}
-		r.Content = items
+		r.Content = mergeContentItems(r.Content, items)
 	}
 	if req.CallbackURL != nil {
 		r.CallbackURL = req.CallbackURL
@@ -519,6 +612,60 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 		r.Watermark = lo.ToPtr(dto.BoolValue(*req.Watermark))
 	}
 	return nil
+}
+
+func mergeContentItems(base, extra []ContentItem) []ContentItem {
+	if len(base) == 0 {
+		return extra
+	}
+	if len(extra) == 0 {
+		return base
+	}
+	merged := append([]ContentItem{}, extra...)
+	for _, item := range base {
+		if contentItemHasDuplicateMedia(merged, item) {
+			continue
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func contentItemHasDuplicateMedia(items []ContentItem, candidate ContentItem) bool {
+	if candidate.ImageURL != nil {
+		url := strings.TrimSpace(candidate.ImageURL.URL)
+		if url == "" {
+			return true
+		}
+		for _, item := range items {
+			if item.ImageURL != nil && strings.TrimSpace(item.ImageURL.URL) == url {
+				return true
+			}
+		}
+	}
+	if candidate.VideoURL != nil {
+		url := strings.TrimSpace(candidate.VideoURL.URL)
+		if url == "" {
+			return true
+		}
+		for _, item := range items {
+			if item.VideoURL != nil && strings.TrimSpace(item.VideoURL.URL) == url {
+				return true
+			}
+		}
+	}
+	if candidate.AudioURL != nil {
+		url := strings.TrimSpace(candidate.AudioURL.URL)
+		if url == "" {
+			return true
+		}
+		for _, item := range items {
+			if item.AudioURL != nil && strings.TrimSpace(item.AudioURL.URL) == url {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func topLevelContentItems(raw []map[string]any) ([]ContentItem, error) {
@@ -614,6 +761,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 		cfg := taskcommon.NormalizeTaskProtocolConfig(nil)
 		openAIVideo := dto.NewOpenAIVideo()
 		openAIVideo.ID = originTask.TaskID
+		openAIVideo.VideoID = originTask.TaskID
 		openAIVideo.TaskID = originTask.TaskID
 		openAIVideo.Status = originTask.Status.ToVideoStatus()
 		openAIVideo.SetProgressStr(originTask.Progress)
@@ -646,6 +794,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 
 	openAIVideo := dto.NewOpenAIVideo()
 	openAIVideo.ID = originTask.TaskID
+	openAIVideo.VideoID = originTask.TaskID
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)

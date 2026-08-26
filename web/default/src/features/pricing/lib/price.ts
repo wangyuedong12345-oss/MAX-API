@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { formatCurrencyFromUSD } from '@/lib/currency'
+import {
+  formatBillingCurrencyFromUSD,
+  formatCurrencyFromUSD,
+} from '@/lib/currency'
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
 
@@ -311,10 +314,36 @@ export function formatTaskRateCardUnitPrice(
     usdExchangeRate
   )
 
-  return stripTrailingZeros(
+  const formatted = stripTrailingZeros(
     formatCurrencyFromUSD(priceInUSD, {
-      digitsLarge: 4,
-      digitsSmall: 4,
+      digitsLarge: 2,
+      digitsSmall: 2,
+      abbreviate: false,
+    })
+  )
+  return `≈ ${formatted}`
+}
+
+export function formatTaskRateCardTotalPrice(
+  unitPrice: number,
+  quantity: number,
+  showWithRecharge = false,
+  priceRate = 1,
+  usdExchangeRate = 1,
+  groupRatioMultiplier = 1
+): string {
+  let priceInUSD = unitPrice * quantity * groupRatioMultiplier
+  priceInUSD = applyRechargeRate(
+    priceInUSD,
+    showWithRecharge,
+    priceRate,
+    usdExchangeRate
+  )
+
+  return stripTrailingZeros(
+    formatBillingCurrencyFromUSD(priceInUSD, {
+      digitsLarge: 2,
+      digitsSmall: 2,
       abbreviate: false,
     })
   )
