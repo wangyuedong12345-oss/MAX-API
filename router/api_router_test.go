@@ -115,6 +115,20 @@ func TestVerificationMethodsRouteIsRegistered(t *testing.T) {
 	t.Fatal("expected GET /api/verify/methods route to be registered")
 }
 
+func TestZeroFrameModelsRouteIsRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	for _, route := range engine.Routes() {
+		if route.Method == http.MethodGet && route.Path == "/api/zeroframe/models" {
+			return
+		}
+	}
+	t.Fatal("expected GET /api/zeroframe/models route to be registered")
+}
+
 func TestHealthRoutesAreRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -72,7 +72,6 @@ import {
   formatGroupPrice,
   formatTaskRateCardRange,
   formatTaskRateCardTotalPrice,
-  formatTaskRateCardUnitPrice,
 } from '../lib/price'
 import type {
   Modality,
@@ -621,121 +620,6 @@ function PriceSection(props: {
           </div>
         </div>
       )}
-    </section>
-  )
-}
-
-function TaskRateCardBreakdown(props: {
-  model: PricingModel
-  priceRate: number
-  usdExchangeRate: number
-  showRechargePrice: boolean
-}) {
-  const { t } = useTranslation()
-  const card = props.model.task_rate_card
-  if (!card) return null
-
-  const defaults = Object.entries(card.defaults || {}).sort(([a], [b]) =>
-    a.localeCompare(b)
-  )
-  const thClass =
-    'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
-
-  const renderParams = (params: Record<string, string>) => {
-    const entries = Object.entries(params || {}).sort(([a], [b]) =>
-      a.localeCompare(b)
-    )
-    if (entries.length === 0) {
-      return (
-        <span className='text-muted-foreground/50 text-xs'>
-          {t('No parameter conditions')}
-        </span>
-      )
-    }
-    return (
-      <div className='flex flex-wrap gap-1'>
-        {entries.map(([key, value]) => (
-          <code
-            key={key}
-            className='bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[11px]'
-          >
-            {key}={value}
-          </code>
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <section>
-      <SectionTitle>{t('Parameter pricing rules')}</SectionTitle>
-      <div className='text-muted-foreground mb-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2'>
-        <div>
-          <span className='text-muted-foreground/60'>{t('Rule')}: </span>
-          <code className='font-mono'>
-            {card.rule_key || props.model.model_name}
-          </code>
-        </div>
-        <div>
-          <span className='text-muted-foreground/60'>{t('Vendor')}: </span>
-          <span>{card.vendor || props.model.vendor_name || '-'}</span>
-        </div>
-        <div>
-          <span className='text-muted-foreground/60'>
-            {t('Strict matching')}:{' '}
-          </span>
-          <span>{card.strict ? t('Yes') : t('No')}</span>
-        </div>
-        <div>
-          <span className='text-muted-foreground/60'>
-            {t('Default parameters')}:{' '}
-          </span>
-          {defaults.length > 0 ? (
-            <span className='font-mono'>
-              {defaults.map(([key, value]) => `${key}=${value}`).join(', ')}
-            </span>
-          ) : (
-            <span>-</span>
-          )}
-        </div>
-      </div>
-      <div className='-mx-4 overflow-x-auto sm:mx-0'>
-        <Table className='text-sm'>
-          <TableHeader>
-            <TableRow className='hover:bg-transparent'>
-              <TableHead className={thClass}>{t('Rule')}</TableHead>
-              <TableHead className={thClass}>{t('Match conditions')}</TableHead>
-              <TableHead className={`${thClass} text-right`}>
-                {t('Unit price')}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(card.rows || []).map((row, index) => (
-              <TableRow key={row.id || index}>
-                <TableCell className='py-2.5 font-mono text-xs'>
-                  {row.id || index + 1}
-                </TableCell>
-                <TableCell className='py-2.5'>
-                  {renderParams(row.match)}
-                </TableCell>
-                <TableCell className='py-2.5 text-right font-mono tabular-nums'>
-                  {formatTaskRateCardUnitPrice(
-                    row.unit_price,
-                    props.showRechargePrice,
-                    props.priceRate,
-                    props.usdExchangeRate,
-                    1
-                  )}
-                  <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
-                    / {t(card.unit || 'unit')}
-                  </span>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
     </section>
   )
 }
@@ -1462,14 +1346,6 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               showRechargePrice={showRechargePrice}
             />
-            {props.model.task_rate_card && (
-              <TaskRateCardBreakdown
-                model={props.model}
-                priceRate={props.priceRate}
-                usdExchangeRate={props.usdExchangeRate}
-                showRechargePrice={showRechargePrice}
-              />
-            )}
             <SeedanceMiniPricingBreakdown
               model={props.model}
               groupRatio={props.groupRatio}
