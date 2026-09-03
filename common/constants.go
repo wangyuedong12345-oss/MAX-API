@@ -18,7 +18,7 @@ var Footer = ""
 var Logo = ""
 var TopUpLink = ""
 
-const DefaultLogo = "/max-api-logo.png"
+const DefaultLogo = "/max-api-logo.svg"
 const LegacyDefaultLogo = "/logo.png"
 
 func NormalizeLogo(logo string) string {

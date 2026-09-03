@@ -185,6 +185,10 @@ export function useSystemConfig(options: UseSystemConfigOptions = {}) {
         if (logo !== DEFAULT_LOGO) {
           // eslint-disable-next-line no-console
           console.error('Failed to load logo:', logo)
+          setConfig({ logo: DEFAULT_LOGO })
+          setLoadedLogoUrl(DEFAULT_LOGO)
+          applyFaviconToDom(DEFAULT_LOGO)
+          return
         }
         // Mark as loaded even on error to prevent infinite retry
         setLoadedLogoUrl(logo)

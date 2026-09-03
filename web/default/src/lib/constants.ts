@@ -22,7 +22,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 
 // System Configuration Defaults
 export const DEFAULT_SYSTEM_NAME = 'MAX API'
-export const DEFAULT_LOGO = '/max-api-logo.png'
+export const DEFAULT_LOGO = '/max-api-logo.svg'
 export const LEGACY_DEFAULT_LOGO = '/logo.png'
 
 export function normalizeDefaultLogo(logo?: string | null): string {
